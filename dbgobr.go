@@ -3,7 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -139,9 +143,6 @@ func process_cmd(s *CmdParseState) bool {
 }
 
 func process_str(text string, cmds *CmdNode) {
-	fmt.Print("Exec ", text)
-
-	// parts := strings.Split(text, " ")
 	parts := strings.Fields(text)
 
 	s := CmdParseState{
@@ -171,8 +172,46 @@ func repl(cmds *CmdNode) {
 	}
 }
 
+func table_create(id string, desc string) {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	fname := fmt.Sprintf("%s.table", id)
+	fpath := path.Join(wd, "./db/tables", fname)
+	fdir := filepath.Dir(fpath)
+
+	fmt.Println("fname", fname, "fpath", fpath, "fdir", fdir)
+
+	err = os.MkdirAll(fdir, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+
+	file, err := os.Create(fpath)
+	if err != nil {
+		panic(err)
+	}
+	// defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	writer.WriteString(fmt.Sprintf("table %s\ndesc %s\n", id, desc))
+	writer.Flush()
+	file.Close()
+}
+
+var hash_string_v hash.Hash32 = fnv.New32()
+
+func hash_string(content string) uint32 {
+	hash_string_v.Reset()
+	hash_string_v.Write([]byte(content))
+	return hash_string_v.Sum32()
+}
+
 func main() {
-	fmt.Println("DbGoBr")
+
+	fmt.Println("DbGoBr", hash_string("DbGoBr"))
 
 	cmds := CmdNode{
 		Name: "root",
@@ -188,7 +227,9 @@ func main() {
 						Name: "create",
 						Data: "create",
 						Exec: func(argsMap ArgsMap) {
+							table_create(argsMap["table.name"], argsMap["table.desc"])
 							fmt.Println("- Created table", argsMap["table.name"])
+
 						},
 						Children: []CmdNode{
 							{
@@ -222,6 +263,13 @@ func main() {
 				Data: "clear",
 				Exec: func(argsMap ArgsMap) {
 					fmt.Print("\033[H\033[2J")
+				},
+			},
+			{
+				Name: "exit",
+				Data: "exit",
+				Exec: func(argsMap ArgsMap) {
+					os.Exit(0)
 				},
 			},
 		},
