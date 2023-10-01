@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -220,7 +221,7 @@ func file_open(fpath string) *os.File {
 	if !file_exists(fpath) {
 		file, err = os.Create(fpath)
 	} else {
-		file, err = os.Open(fpath)
+		file, err = os.OpenFile(fpath, os.O_RDWR, 0644)
 	}
 	if err != nil {
 		panic(err)
@@ -234,6 +235,7 @@ func file_open(fpath string) *os.File {
  */
 func ensure_file(fpath string) *os.File {
 	ensure_fdir(fpath)
+
 	return file_open(fpath)
 }
 
@@ -360,7 +362,7 @@ func (self *TableDef) calcByteLen() int {
 			result += 8
 			break
 		case "byte":
-		case "bool":
+		case "boolean":
 			result += 1
 			break
 		case "fkey":
@@ -371,33 +373,16 @@ func (self *TableDef) calcByteLen() int {
 	return result
 }
 
-func table_commit(def *TableDef) {
-	fname := fstr("./db/tables/%s.table", def.Id)
-	fpath := wd_file(fname)
-	file := ensure_file(fpath)
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-
-	err := binary.Write(file, binary.LittleEndian, def)
-	if err != nil {
-		panic(err)
-	}
-
-	// bLen := def.calcByteLen()
-	// buf := make([]byte, bLen)
-
-	// file.
-
-	writer.Flush()
-}
-
 func find_table_def(id string) (*TableDef, error) {
 	td := dbDef.Tables[id]
 	if td == nil {
 		return nil, fmt.Errorf("table by id %s not found, cannot insert", id)
 	}
 	return td, nil
+}
+
+func str_clip(s string, max int) string {
+	return s[:min(len(s), max)]
 }
 
 func table_insert(argsMap ArgsMap) {
@@ -429,12 +414,73 @@ func table_insert(argsMap ArgsMap) {
 		col := td.Columns[k]
 		if col == nil {
 			fmt.Println("Key: ", k, "is not present in table", tableName, "ignoring")
-		} else {
-			fmt.Println("Key: ", k, "Value: ", v)
+			continue
+		}
+		// fmt.Println("Key: ", k, "Value: ", v)
+		argsMap[k] = v
+	}
+
+	bLen := td.calcByteLen()
+	fmt.Println("Generating byte buffer w/ size", bLen, "bytes")
+
+	rowBuffer := make([]byte, bLen)
+	offset := 0
+
+	for _, col := range td.Columns {
+		v := argsMap[col.Id]
+		if v == "" {
+			fmt.Print("Missing key \"",
+				col.Id,
+				"\" of type ",
+				col.Type,
+				", cannot insert into table\n",
+			)
+			return
+		}
+		// fmt.Println("Preparing", col.Id, "as", col.Type)
+		switch col.Type {
+		case "string32":
+			copy(rowBuffer[offset:], str_clip(v, 32))
+			offset += 32
+			break
+		case "string128":
+			copy(rowBuffer[offset:], str_clip(v, 128))
+			offset += 128
+			break
+		case "string256":
+			copy(rowBuffer[offset:], str_clip(v, 256))
+			offset += 256
+			break
+		case "boolean":
+			if v == "true" {
+				rowBuffer[offset] = 1
+			} else {
+				rowBuffer[offset] = 1
+			}
+			offset += 1
+			break
 		}
 	}
 
 	fmt.Println("Inserting", str, "into table", tableName)
+
+	fname := fstr("./db/tables/%s.table", tableName)
+	fpath := wd_file(fname)
+	file := ensure_file(fpath)
+
+	seeked, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		fmt.Println("Error seeking to end of file for appending", err)
+		panic(err)
+	}
+	fmt.Println("Writing at", seeked, "bytes offset into table file")
+	_, err = file.Write(rowBuffer)
+
+	if err != nil {
+		fmt.Println("Error writing file", err)
+	}
+
+	file.Close()
 }
 
 func main() {
@@ -454,7 +500,7 @@ func main() {
 					Columns: ColumnMap{
 						"username": {
 							Id:   "username",
-							Type: "string",
+							Type: "string32",
 						},
 						"verified": {
 							Id:   "verified",
