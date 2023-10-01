@@ -1,0 +1,1 @@
+{"Id":"demo","Desc":"A demo database","Tables":{"users":{"Id":"users","Desc":"A user of the software","Columns":{"username":{"Type":"string","Id":"username"},"verified":{"Type":"boolean","Id":"verified"}}}}}

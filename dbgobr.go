@@ -2,12 +2,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -172,33 +176,104 @@ func repl(cmds *CmdNode) {
 	}
 }
 
-func table_create(id string, desc string) {
+/** Generate the file path of a file in the working directory
+ *
+ */
+func wd_file(fname string) string {
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
-	fname := fmt.Sprintf("%s.table", id)
-	fpath := path.Join(wd, "./db/tables", fname)
+	fpath := path.Join(wd, fname)
+	return fpath
+}
+
+/** Ensure a directory exists
+ * accepts a file path as well, but will clip off the file name
+ */
+func ensure_fdir(fpath string) {
 	fdir := filepath.Dir(fpath)
 
-	fmt.Println("fname", fname, "fpath", fpath, "fdir", fdir)
-
-	err = os.MkdirAll(fdir, os.ModePerm)
+	err := os.MkdirAll(fdir, os.ModePerm)
 	if err != nil {
 		panic(err)
 	}
+}
 
-	file, err := os.Create(fpath)
+// check if a file exists
+func file_exists(fpath string) bool {
+	_, err := os.Stat(fpath)
+	if err == nil {
+		return true
+	} else if os.IsNotExist(err) {
+		return false
+	} else {
+		panic(err)
+	}
+}
+
+// creates if doesn't exist, but doesn't create directories
+func file_open(fpath string) *os.File {
+	var file *os.File
+	var err error
+
+	if !file_exists(fpath) {
+		file, err = os.Create(fpath)
+	} else {
+		file, err = os.Open(fpath)
+	}
 	if err != nil {
 		panic(err)
 	}
-	// defer file.Close()
+	return file
+}
 
-	writer := bufio.NewWriter(file)
+/** WARN: You are responsible for calling file.Close()
+ * Ensure a file specified by its path exists
+ * including directories that may not exist
+ */
+func ensure_file(fpath string) *os.File {
+	ensure_fdir(fpath)
+	return file_open(fpath)
+}
 
-	writer.WriteString(fmt.Sprintf("table %s\ndesc %s\n", id, desc))
-	writer.Flush()
-	file.Close()
+// alias
+func fstr(s string, a ...any) string {
+	return fmt.Sprintf(s, a...)
+}
+
+const (
+	ColumnString = iota
+	ColumnInt
+	ColumnFloat
+)
+
+func ValueToColumnType(v any) (int, error) {
+	switch v.(type) {
+	case string:
+		return ColumnString, nil
+	case int:
+		return ColumnInt, nil
+	case float64:
+		return ColumnFloat, nil
+	default:
+		return 0, fmt.Errorf("Unhandled value type %s", v)
+	}
+}
+
+var intToBytesBuf *bytes.Buffer = new(bytes.Buffer)
+
+func intToBytes(v int) []byte {
+	binary.Write(intToBytesBuf, binary.LittleEndian, v)
+	return intToBytesBuf.Bytes()
+}
+func uint32ToBytes(v uint32) []byte {
+	binary.Write(intToBytesBuf, binary.LittleEndian, v)
+	return intToBytesBuf.Bytes()
+}
+
+func table_create(def *TableDef) {
+	dbDef.Tables[def.Id] = def
 }
 
 var hash_string_v hash.Hash32 = fnv.New32()
@@ -209,7 +284,188 @@ func hash_string(content string) uint32 {
 	return hash_string_v.Sum32()
 }
 
+type ColumnDef struct {
+	Type string
+	Id   string
+}
+
+func stringToColumnType(t string) (int, error) {
+	typeValue := reflect.ValueOf(t)
+	return ValueToColumnType(typeValue)
+}
+
+type ColumnMap map[string]*ColumnDef
+
+type TableDef struct {
+	Id      string
+	Desc    string
+	Columns ColumnMap
+}
+
+type TableMap map[string]*TableDef
+
+type DbDef struct {
+	Id     string
+	Desc   string
+	Tables TableMap
+}
+
+var dbDefFname = "./db/defs.json"
+var dbDefFpath = wd_file(dbDefFname)
+
+var dbDef *DbDef = &DbDef{}
+
+func dbDefLoad() {
+	data, err := os.ReadFile(dbDefFpath)
+	if err != nil {
+		fmt.Println("Error reading file", err)
+		panic(err)
+	}
+
+	err = json.Unmarshal(data, dbDef)
+	if err != nil {
+		fmt.Println("Error parsing json", err)
+		panic(err)
+	}
+}
+func dbDefSave() {
+	data, err := json.Marshal(dbDef)
+	if err != nil {
+		panic(err)
+	}
+	err = os.WriteFile(dbDefFpath, data, 0644)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (self *TableDef) calcByteLen() int {
+	result := 0
+	for _, col := range self.Columns {
+		switch col.Type {
+		case "string32":
+			result += 32
+			break
+		case "string256":
+			result += 256
+			break
+		case "string1024":
+			result += 1024
+			break
+		case "string2048":
+			result += 2048
+			break
+		case "int":
+		case "float64":
+			result += 8
+			break
+		case "byte":
+		case "bool":
+			result += 1
+			break
+		case "fkey":
+			result += 8 + 32 //int (table id) + table name (32 char max)
+			break
+		}
+	}
+	return result
+}
+
+func table_commit(def *TableDef) {
+	fname := fstr("./db/tables/%s.table", def.Id)
+	fpath := wd_file(fname)
+	file := ensure_file(fpath)
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	err := binary.Write(file, binary.LittleEndian, def)
+	if err != nil {
+		panic(err)
+	}
+
+	// bLen := def.calcByteLen()
+	// buf := make([]byte, bLen)
+
+	// file.
+
+	writer.Flush()
+}
+
+func find_table_def(id string) (*TableDef, error) {
+	td := dbDef.Tables[id]
+	if td == nil {
+		return nil, fmt.Errorf("table by id %s not found, cannot insert", id)
+	}
+	return td, nil
+}
+
+func table_insert(argsMap ArgsMap) {
+	tableName := argsMap["table.name"]
+
+	td, err := find_table_def(tableName)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	str := argsMap["table.data"]
+
+	parts := strings.Split(str, ",")
+	for _, part := range parts {
+		kv := strings.Split(part, "=")
+		if len(kv) < 2 {
+			fmt.Println("Expected [key]=[value], but only found [key]=, this is invalid. table insert cancelled")
+			return
+		}
+		k := kv[0]
+		v := kv[1]
+
+		if td.Columns == nil {
+			fmt.Println("Table", tableName, "does not have any columns defined, ignoring")
+			return
+		}
+
+		col := td.Columns[k]
+		if col == nil {
+			fmt.Println("Key: ", k, "is not present in table", tableName, "ignoring")
+		} else {
+			fmt.Println("Key: ", k, "Value: ", v)
+		}
+	}
+
+	fmt.Println("Inserting", str, "into table", tableName)
+}
+
 func main() {
+
+	if file_exists(dbDefFpath) {
+		fmt.Println("Found db/defs.json, loaded")
+		dbDefLoad()
+	} else {
+		fmt.Println("No db/defs.json, created")
+		dbDef = &DbDef{
+			Id:   "demo",
+			Desc: "A demo database",
+			Tables: TableMap{
+				"users": {
+					Id:   "users",
+					Desc: "A user of the software",
+					Columns: ColumnMap{
+						"username": {
+							Id:   "username",
+							Type: "string",
+						},
+						"verified": {
+							Id:   "verified",
+							Type: "boolean",
+						},
+					},
+				},
+			},
+		}
+		dbDefSave()
+	}
 
 	fmt.Println("DbGoBr", hash_string("DbGoBr"))
 
@@ -227,8 +483,16 @@ func main() {
 						Name: "create",
 						Data: "create",
 						Exec: func(argsMap ArgsMap) {
-							table_create(argsMap["table.name"], argsMap["table.desc"])
-							fmt.Println("- Created table", argsMap["table.name"])
+							def := TableDef{
+								Id:   argsMap["table.name"],
+								Desc: argsMap["table.desc"],
+							}
+
+							table_create(&def)
+
+							dbDefSave()
+
+							fmt.Println("- Created table", def.Id)
 
 						},
 						Children: []CmdNode{
@@ -247,7 +511,87 @@ func main() {
 						Name: "delete",
 						Data: "delete",
 						Exec: func(argsMap ArgsMap) {
-							fmt.Println("- Deleted table", argsMap["table.name"])
+							toRemoveName := argsMap["table.name"]
+
+							toRemove := dbDef.Tables[toRemoveName]
+
+							if toRemove == nil {
+								fmt.Println("Didn't find table by id", toRemoveName, "cannot remove it")
+							} else {
+								delete(dbDef.Tables, toRemoveName)
+								dbDefSave()
+								fmt.Println("- Deleted table", toRemoveName)
+							}
+
+						},
+						Children: []CmdNode{
+							{
+								Name: "table.name",
+								Data: "",
+							},
+						},
+					},
+
+					{
+						Name: "insert",
+						Data: "insert",
+						Exec: table_insert,
+						Children: []CmdNode{
+							{
+								Name: "into",
+								Data: "into",
+								Children: []CmdNode{
+									{
+										Name: "table.name",
+										Data: "",
+									},
+									{
+										Name: "table.data",
+										Data: "",
+									},
+								},
+							},
+						},
+					},
+
+					{
+						Name: "list",
+						Data: "list",
+						Exec: func(argsMap ArgsMap) {
+							fmt.Print("List of all tables: [")
+							for key := range dbDef.Tables {
+								fmt.Print(key, ", ")
+							}
+							fmt.Println("]")
+						},
+					},
+
+					{
+						Name: "inspect",
+						Data: "inspect",
+						Exec: func(argsMap ArgsMap) {
+							tn := argsMap["table.name"]
+							td, err := find_table_def(tn)
+							if err != nil {
+								fmt.Println(err)
+								return
+							}
+							colCount := 0
+							if td.Columns != nil {
+								colCount = len(td.Columns)
+							}
+							fmt.Print(
+								"Table ",
+								td.Id,
+								" has ",
+								colCount,
+								" columns [",
+							)
+
+							for _, col := range td.Columns {
+								fmt.Print(col.Id, ", ")
+							}
+							fmt.Println("]")
 						},
 						Children: []CmdNode{
 							{
