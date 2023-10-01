@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -438,7 +439,15 @@ func table_insert(argsMap ArgsMap) {
 	rowBuffer := make([]byte, bLen)
 	offset := 0
 
-	for _, col := range td.Columns {
+	keys := make([]string, 0, len(td.Columns))
+	for k := range td.Columns {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, colName := range keys {
+		col := td.Columns[colName]
+
 		v := argsMap[col.Id]
 		if v == "" {
 			fmt.Print("Missing key \"",
