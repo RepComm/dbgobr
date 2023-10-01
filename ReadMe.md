@@ -9,7 +9,6 @@ Please don't use this code as a backend for anything serious
 - repl command processor
 
 ## todo
-- table creation/deletion
 - table persistent storage
 - http API
 - table indexing

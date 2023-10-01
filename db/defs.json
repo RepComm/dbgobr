@@ -1,1 +1,38 @@
-{"Id":"demo","Desc":"A demo database","Tables":{"users":{"Id":"users","Desc":"A user of the software","Columns":{"username":{"Type":"string32","Id":"username"},"verified":{"Type":"boolean","Id":"verified"}}}}}
+{
+    "Id": "demo",
+    "Desc": "A demo database",
+    "Tables": {
+        "rooms": {
+            "Id": "rooms",
+            "Desc": "A_place_to_hang_out",
+            "Columns": {
+                "name": {
+                    "Type": "string32",
+                    "Id": "name"
+                },
+                "occupants": {
+                    "Type": "string32",
+                    "Id": "occupants"
+                },
+                "private": {
+                    "Type": "boolean",
+                    "Id": "private"
+                }
+            }
+        },
+        "users": {
+            "Id": "users",
+            "Desc": "A user of the software",
+            "Columns": {
+                "username": {
+                    "Type": "string32",
+                    "Id": "username"
+                },
+                "verified": {
+                    "Type": "boolean",
+                    "Id": "verified"
+                }
+            }
+        }
+    }
+}

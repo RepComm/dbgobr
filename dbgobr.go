@@ -274,10 +274,6 @@ func uint32ToBytes(v uint32) []byte {
 	return intToBytesBuf.Bytes()
 }
 
-func table_create(def *TableDef) {
-	dbDef.Tables[def.Id] = def
-}
-
 var hash_string_v hash.Hash32 = fnv.New32()
 
 func hash_string(content string) uint32 {
@@ -381,8 +377,24 @@ func find_table_def(id string) (*TableDef, error) {
 	return td, nil
 }
 
+/**Turns any string into a string with max length of 'max'*/
 func str_clip(s string, max int) string {
 	return s[:min(len(s), max)]
+}
+
+/**Reads a null terminated string from a byte array
+ * If 'max' bytes reached before finding a null terminator
+ * the string will be prematurely terminated and returned
+ */
+func str_unclip(src []byte, max int) string {
+	end := max
+	for i, ch := range src {
+		if ch == 0 || i >= max {
+			end = i
+			break
+		}
+	}
+	return string(src[:end])
 }
 
 func table_insert(argsMap ArgsMap) {
@@ -483,6 +495,41 @@ func table_insert(argsMap ArgsMap) {
 	file.Close()
 }
 
+func table_create(argsMap ArgsMap) {
+	tableId := argsMap["table.name"]
+	tableDesc := argsMap["table.desc"]
+	tableCols := argsMap["table.cols"]
+
+	def := TableDef{
+		Id:      tableId,
+		Desc:    tableDesc,
+		Columns: ColumnMap{},
+	}
+
+	parts := strings.Split(tableCols, ",")
+	for _, part := range parts {
+		kv := strings.Split(part, "=")
+		if len(kv) < 2 {
+			fmt.Println("Expected [key]=[value], but only found [key]=, this is invalid. table insert cancelled")
+			return
+		}
+		k := kv[0]
+		v := kv[1]
+
+		def.Columns[k] = &ColumnDef{
+			Id:   k,
+			Type: v,
+		}
+	}
+
+	dbDef.Tables[def.Id] = &def
+
+	dbDefSave()
+
+	fmt.Println("- Created table", def.Id)
+
+}
+
 func main() {
 
 	if file_exists(dbDefFpath) {
@@ -528,19 +575,7 @@ func main() {
 					{
 						Name: "create",
 						Data: "create",
-						Exec: func(argsMap ArgsMap) {
-							def := TableDef{
-								Id:   argsMap["table.name"],
-								Desc: argsMap["table.desc"],
-							}
-
-							table_create(&def)
-
-							dbDefSave()
-
-							fmt.Println("- Created table", def.Id)
-
-						},
+						Exec: table_create,
 						Children: []CmdNode{
 							{
 								Name: "table.name",
@@ -548,6 +583,10 @@ func main() {
 							},
 							{
 								Name: "table.desc",
+								Data: "",
+							},
+							{
+								Name: "table.cols",
 								Data: "",
 							},
 						},
